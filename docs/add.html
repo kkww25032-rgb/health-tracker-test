@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>헬스 루틴 기록 - 기록 입력</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>운동 기록 입력</h1>
+  <p class="sub">입력한 기록은 이 브라우저에 자동 저장됩니다.</p>
+
+  <form class="card" id="form" autocomplete="off">
+    <div id="chipsBox">
+      <label>최근 종목 (누르면 지난 기록으로 채워집니다)</label>
+      <div class="chips" id="chips"></div>
+    </div>
+
+    <label for="exercise">종목</label>
+    <input id="exercise" list="names" placeholder="예: 스쿼트" required>
+    <datalist id="names"></datalist>
+
+    <div class="row">
+      <div>
+        <label for="weight">무게(kg)</label>
+        <input id="weight" type="number" inputmode="decimal" min="0" step="0.5" required>
+      </div>
+      <div>
+        <label for="reps">횟수</label>
+        <input id="reps" type="number" inputmode="numeric" min="1" step="1" required>
+      </div>
+      <div>
+        <label for="sets">세트</label>
+        <input id="sets" type="number" inputmode="numeric" min="1" step="1" required>
+      </div>
+    </div>
+
+    <button class="btn block" type="submit">기록 추가</button>
+    <p class="msg" id="msg"></p>
+    <div id="prBanner" hidden></div>
+  </form>
+
+  <div class="card">
+    <h2>오늘 입력한 기록</h2>
+    <div id="todayList"></div>
+  </div>
+
+  <div class="card backup">
+    <h2>기록 백업</h2>
+    <p class="sub">기록은 이 브라우저에만 저장됩니다. 파일로 내보내 두면 다른 기기나 브라우저에서 가져올 수 있습니다.</p>
+    <div class="tools">
+      <button class="btn ghost small" id="exportBtn" type="button">내보내기</button>
+      <label class="btn ghost small" for="importFile" style="margin:0">가져오기</label>
+      <input id="importFile" type="file" accept="application/json,.json">
+    </div>
+    <p class="msg" id="backupMsg"></p>
+  </div>
+</main>
+<nav id="nav"></nav>
+
+<script src="storage.js"></script>
+<script src="nav.js"></script>
+<script>
+  // 기록 입력·저장 담당
+  renderNav("add");
+
+  const form = document.getElementById("form");
+  const msg = document.getElementById("msg");
+
+  function showMsg(text, ok) {
+    msg.textContent = text;
+    msg.className = "msg " + (ok ? "ok" : "err");
+  }
+
+  function renderNames() {
+    const list = document.getElementById("names");
+    list.replaceChildren();
+    [...new Set(loadRecords().map((r) => r.exercise))].forEach((n) => {
+      const opt = document.createElement("option");
+      opt.value = n;
+      list.appendChild(opt);
+    });
+    renderChips();
+  }
+
+  // 최근 종목 버튼: 누르면 그 종목의 지난 기록으로 입력칸을 채운다
+  function renderChips() {
+    const records = loadRecords();
+    const box = document.getElementById("chips");
+    box.replaceChildren();
+    const names = recentExercises(records);
+    document.getElementById("chipsBox").hidden = !names.length;
+    names.forEach((name) => {
+      const btn = el("button", name, "chip");
+      btn.type = "button";
+      btn.addEventListener("click", () => {
+        const last = lastRecordOf(loadRecords(), name);
+        if (!last) return;
+        document.getElementById("exercise").value = last.exercise;
+        document.getElementById("weight").value = last.weight;
+        document.getElementById("reps").value = last.reps;
+        document.getElementById("sets").value = last.sets;
+        const w = document.getElementById("weight");
+        w.focus();
+        w.select();
+      });
+      box.appendChild(btn);
+    });
+  }
+
+  // 저장 직후 신기록 여부를 보여준다
+  function showPR(result) {
+    const box = document.getElementById("prBanner");
+    box.replaceChildren();
+    if (result.first) {
+      box.className = "pr first";
+      box.textContent = "이 종목의 첫 기록입니다. 다음 기록부터 신기록을 비교합니다.";
+      box.hidden = false;
+    } else if (result.prs.length) {
+      box.className = "pr";
+      box.appendChild(el("b", "🏆 신기록"));
+      result.prs.forEach((p) => {
+        box.appendChild(el("div", p.label + " " + fmtNum(p.before) + " → " + fmtNum(p.after) + p.unit));
+      });
+      box.hidden = false;
+    } else {
+      box.hidden = true;
+    }
+  }
+
+  function renderToday() {
+    const box = document.getElementById("todayList");
+    box.replaceChildren();
+    const today = dateString();
+    const recs = loadRecords()
+      .map((r, index) => ({ r, index }))
+      .filter((x) => x.r.date === today);
+    if (!recs.length) {
+      box.appendChild(el("div", "오늘 입력한 기록이 없습니다", "empty"));
+      return;
+    }
+    const table = el("table");
+    const head = el("tr");
+    ["종목", "무게", "횟수×세트", ""].forEach((t, i) => head.appendChild(el("th", t, i >= 1 ? "num" : "")));
+    table.appendChild(head);
+    recs.forEach(({ r, index }) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", r.exercise));
+      tr.appendChild(el("td", fmtNum(r.weight) + "kg", "num"));
+      tr.appendChild(el("td", r.reps + "×" + r.sets, "num"));
+
+      // 잘못 입력한 기록 삭제
+      const del = el("button", "삭제", "btn ghost small");
+      del.type = "button";
+      del.setAttribute("aria-label", r.exercise + " 기록 삭제");
+      del.addEventListener("click", () => {
+        if (!removeRecordAt(index)) return showMsg("삭제에 실패했습니다", false);
+        showMsg("기록을 삭제했습니다", true);
+        renderNames();
+        renderToday();
+      });
+      const cell = el("td", undefined, "num");
+      cell.appendChild(del);
+      tr.appendChild(cell);
+
+      table.appendChild(tr);
+    });
+    box.appendChild(table);
+  }
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const exercise = document.getElementById("exercise").value.trim();
+    const weight = parseFloat(document.getElementById("weight").value);
+    const reps = parseInt(document.getElementById("reps").value, 10);
+    const sets = parseInt(document.getElementById("sets").value, 10);
+
+    if (!exercise) return showMsg("종목을 입력해 주세요", false);
+    if (!(weight >= 0)) return showMsg("무게는 0 이상의 숫자로 입력해 주세요", false);
+    if (!(reps >= 1) || !(sets >= 1)) return showMsg("횟수와 세트는 1 이상으로 입력해 주세요", false);
+
+    document.getElementById("prBanner").hidden = true;
+    const record = { date: dateString(), exercise, weight, reps, sets };
+    const pr = checkPersonalRecords(loadRecords().filter((r) => r.exercise === exercise), record);
+    const ok = addRecord(record);
+    if (!ok) return showMsg("저장에 실패했습니다. 브라우저 저장소를 확인해 주세요", false);
+    showPR(pr);
+
+    showMsg("기록 완료", true);
+    document.getElementById("weight").value = "";
+    document.getElementById("reps").value = "";
+    document.getElementById("sets").value = "";
+    document.getElementById("exercise").focus();
+    renderNames();
+    renderToday();
+  });
+
+  // 기록 백업: JSON 파일로 내보내고 가져오기
+  function showBackupMsg(text, ok) {
+    const m = document.getElementById("backupMsg");
+    m.textContent = text;
+    m.className = "msg " + (ok ? "ok" : "err");
+  }
+
+  document.getElementById("exportBtn").addEventListener("click", () => {
+    const records = loadRecords();
+    if (!records.length) return showBackupMsg("내보낼 기록이 없습니다", false);
+    const blob = new Blob([exportRecordsJSON()], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "health-records-" + dateString() + ".json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showBackupMsg(records.length + "건을 내보냈습니다", true);
+  });
+
+  document.getElementById("importFile").addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    e.target.value = ""; // 같은 파일을 다시 골라도 동작하게
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = importRecordsJSON(String(reader.result));
+      if (!res.ok) return showBackupMsg("가져오기 실패: " + res.error, false);
+      showBackupMsg(
+        res.added + "건 추가, 중복 " + res.skipped + "건 건너뜀" + (res.invalid ? ", 형식 오류 " + res.invalid + "건 제외" : ""),
+        true
+      );
+      renderNames();
+      renderToday();
+    };
+    reader.onerror = () => showBackupMsg("파일을 읽지 못했습니다", false);
+    reader.readAsText(file);
+  });
+
+  renderNames();
+  renderToday();
+</script>
+</body>
+</html>

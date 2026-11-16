@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>헬스 루틴 기록 - 홈</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>헬스 루틴 기록</h1>
+  <p class="sub" id="today"></p>
+
+  <div class="card hero">
+    <h2>오늘</h2>
+    <div class="big"><b id="todayCount">0</b>건 기록 · <span id="todaySets">0</span>세트</div>
+    <div id="todayBrief"></div>
+    <a class="btn block" href="add.html">오늘 운동 기록하기</a>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b id="streak">0</b><span>연속 운동일</span></div>
+    <div class="stat"><b id="weekDays">0</b><span>이번 주 운동일</span></div>
+    <div class="stat"><b id="weekSets">0</b><span>이번 주 세트</span></div>
+  </div>
+
+  <div class="card goal-mini">
+    <h2>이번 주 목표</h2>
+    <p class="sub" id="homeGoalText"></p>
+    <div class="progress" id="homeGoalTrack" role="progressbar" aria-label="주간 목표 달성률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div id="homeGoalBar" style="height:100%;width:0;background:var(--accent)"></div>
+    </div>
+    <a href="weekly.html">목표 정하기 또는 바꾸기</a>
+  </div>
+
+  <div class="card">
+    <div class="cal-head">
+      <button class="btn ghost small" id="calPrev" type="button">◀ 이전</button>
+      <strong id="calTitle"></strong>
+      <button class="btn ghost small" id="calNext" type="button">다음 ▶</button>
+    </div>
+    <p class="sub" style="margin:0 0 8px;text-align:center">이 달 <b id="monthDays">0</b>일 운동</p>
+    <div class="cal" id="cal"></div>
+  </div>
+
+  <div class="card">
+    <h2>최근 기록</h2>
+    <div id="recent"></div>
+  </div>
+
+  <div class="card">
+    <h2>데이터 관리</h2>
+    <p class="sub">기록은 이 브라우저에만 저장됩니다.</p>
+    <div class="tools">
+      <button class="btn ghost small" id="sampleBtn" type="button">예시 데이터 넣기</button>
+      <button class="btn ghost small" id="resetBtn" type="button">전체 초기화</button>
+    </div>
+    <p class="msg" id="msg"></p>
+  </div>
+</main>
+<nav id="nav"></nav>
+
+<script src="storage.js"></script>
+<script src="nav.js"></script>
+<script>
+  // 홈 화면 담당: 오늘/이번 주 요약과 최근 기록
+  renderNav("home");
+
+  function renderHome() {
+    const records = loadRecords();
+    const today = dateString();
+    const week = getWeekRange();
+    const weekRecs = records.filter((r) => r.date >= week.start && r.date <= week.end);
+
+    document.getElementById("today").textContent = today;
+    document.getElementById("todayCount").textContent = records.filter((r) => r.date === today).length;
+    document.getElementById("weekDays").textContent = new Set(weekRecs.map((r) => r.date)).size;
+    document.getElementById("weekSets").textContent = weekRecs.reduce((s, r) => s + Number(r.sets), 0);
+    document.getElementById("streak").textContent = calcStreak(records);
+
+    // 오늘 카드: 오늘 한 기록을 맨 위에서 바로 보여준다
+    const todayRecs = records.filter((r) => r.date === today);
+    document.getElementById("todaySets").textContent = todayRecs.reduce((s, r) => s + Number(r.sets), 0);
+    const brief = document.getElementById("todayBrief");
+    brief.replaceChildren();
+    if (!todayRecs.length) {
+      brief.appendChild(el("div", "오늘 아직 기록이 없습니다", "empty"));
+    } else {
+      todayRecs.forEach((r) => {
+        const line = el("div", undefined, "line");
+        line.appendChild(el("span", r.exercise));
+        line.appendChild(el("span", fmtNum(r.weight) + "kg · " + r.reps + "×" + r.sets));
+        brief.appendChild(line);
+      });
+    }
+
+    // 이번 주 목표 달성률
+    const goal = loadGoal();
+    const weekSetTotal = weekRecs.reduce((s, r) => s + Number(r.sets), 0);
+    const gBar = document.getElementById("homeGoalBar");
+    const gText = document.getElementById("homeGoalText");
+    if (!goal) {
+      gBar.style.width = "0%";
+      document.getElementById("homeGoalTrack").setAttribute("aria-valuenow", "0");
+      gText.textContent = "아직 목표가 없습니다";
+    } else {
+      const pct = Math.min(100, Math.round((weekSetTotal / goal) * 100));
+      gBar.style.width = pct + "%";
+      document.getElementById("homeGoalTrack").setAttribute("aria-valuenow", String(pct));
+      gText.textContent = weekSetTotal >= goal
+        ? "목표 달성: " + weekSetTotal + " / " + goal + " 세트"
+        : weekSetTotal + " / " + goal + " 세트 (" + pct + "%)";
+    }
+    renderCalendar(records);
+
+    const box = document.getElementById("recent");
+    box.replaceChildren();
+    if (!records.length) {
+      box.appendChild(el("div", "기록이 없습니다. 아래 '기록' 탭에서 첫 운동을 입력해 보세요.", "empty"));
+      return;
+    }
+    const table = el("table");
+    const head = el("tr");
+    ["날짜", "종목", "무게", "횟수×세트"].forEach((t, i) => head.appendChild(el("th", t, i >= 2 ? "num" : "")));
+    table.appendChild(head);
+    records.slice(-5).reverse().forEach((r) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", r.date));
+      tr.appendChild(el("td", r.exercise));
+      tr.appendChild(el("td", fmtNum(r.weight) + "kg", "num"));
+      tr.appendChild(el("td", r.reps + "×" + r.sets, "num"));
+      table.appendChild(tr);
+    });
+    box.appendChild(table);
+  }
+
+  // 월간 달력: 운동한 날을 색으로 표시한다
+  let calOffset = 0; // 0이면 이번 달, -1이면 지난달
+  function renderCalendar(records) {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth() + calOffset, 1);
+    const year = first.getFullYear();
+    const month = first.getMonth();
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const days = recordDays(records);
+    const todayKey = dateString();
+
+    document.getElementById("calTitle").textContent = year + "년 " + (month + 1) + "월";
+    document.getElementById("calNext").disabled = calOffset >= 0;
+
+    const prefix = year + "-" + String(month + 1).padStart(2, "0") + "-";
+    let count = 0;
+    const grid = document.getElementById("cal");
+    grid.replaceChildren();
+    ["월", "화", "수", "목", "금", "토", "일"].forEach((t) => grid.appendChild(el("div", t, "dow")));
+    const blanks = (first.getDay() + 6) % 7; // 월요일 시작
+    for (let i = 0; i < blanks; i++) grid.appendChild(el("div"));
+    for (let d = 1; d <= lastDay; d++) {
+      const key = prefix + String(d).padStart(2, "0");
+      const done = days.has(key);
+      if (done) count += 1;
+      grid.appendChild(el("div", String(d), "day" + (done ? " done" : "") + (key === todayKey ? " today" : "")));
+    }
+    document.getElementById("monthDays").textContent = count;
+  }
+
+  document.getElementById("calPrev").addEventListener("click", () => { calOffset -= 1; renderHome(); });
+  document.getElementById("calNext").addEventListener("click", () => { if (calOffset < 0) { calOffset += 1; renderHome(); } });
+
+  document.getElementById("sampleBtn").addEventListener("click", () => {
+    // 발표 시연용 예시 데이터 (실제 운동 기록이 아님)
+    const samples = [
+      [0, "스쿼트", 60, 10, 3], [0, "벤치프레스", 40, 10, 3],
+      [2, "스쿼트", 70, 8, 3], [3, "데드리프트", 80, 5, 3],
+      [5, "벤치프레스", 45, 8, 3],
+    ];
+    const all = loadRecords();
+    samples.forEach(([ago, exercise, weight, reps, sets]) => {
+      const d = new Date();
+      d.setDate(d.getDate() - ago);
+      all.push({ date: dateString(d), exercise, weight, reps, sets });
+    });
+    const ok = saveRecords(all);
+    document.getElementById("msg").textContent = ok ? "예시 데이터를 추가했습니다" : "저장에 실패했습니다";
+    document.getElementById("msg").className = "msg " + (ok ? "ok" : "err");
+    renderHome();
+  });
+
+  document.getElementById("resetBtn").addEventListener("click", () => {
+    if (!confirm("저장된 기록을 모두 삭제할까요?")) return;
+    clearRecords();
+    document.getElementById("msg").textContent = "모든 기록을 삭제했습니다";
+    document.getElementById("msg").className = "msg ok";
+    renderHome();
+  });
+
+  renderHome();
+</script>
+</body>
+</html>

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>헬스 루틴 기록 - 주간 요약</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>주간 요약</h1>
+  <p class="sub">월요일부터 일요일까지 한 주를 정리합니다.</p>
+
+  <div class="weeknav">
+    <button class="btn ghost small" id="prev" type="button">◀ 이전</button>
+    <strong id="range"></strong>
+    <button class="btn ghost small" id="next" type="button">다음 ▶</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b id="days">0</b><span>운동한 날</span><small class="delta" id="dDays"></small></div>
+    <div class="stat"><b id="sets">0</b><span>총 세트</span><small class="delta" id="dSets"></small></div>
+    <div class="stat"><b id="volume">0</b><span>총 볼륨(kg)</span><small class="delta" id="dVolume"></small></div>
+  </div>
+
+  <div class="card">
+    <h2>주간 목표</h2>
+    <div class="goalrow">
+      <input id="goal" type="number" inputmode="numeric" min="1" step="1" placeholder="목표 세트 수" aria-label="주간 목표 세트 수">
+      <button class="btn small" id="saveGoal" type="button">저장</button>
+    </div>
+    <div class="progress" id="progress" role="progressbar" aria-label="주간 목표 달성률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div id="progressBar"></div>
+    </div>
+    <p class="sub" id="goalText"></p>
+  </div>
+
+  <div class="card">
+    <h2>요일별 세트 수</h2>
+    <div class="bars" id="bars"></div>
+  </div>
+
+  <div class="card">
+    <h2>종목별 합계</h2>
+    <div id="byExercise"></div>
+    <p class="sub">볼륨 = 무게 × 횟수 × 세트</p>
+  </div>
+</main>
+<nav id="nav"></nav>
+
+<script src="storage.js"></script>
+<script src="nav.js"></script>
+<script>
+  // 주간 요약 담당
+  renderNav("weekly");
+
+  const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
+  let offset = 0; // 0이면 이번 주, -1이면 지난주
+
+  function render() {
+    const base = new Date();
+    base.setDate(base.getDate() + offset * 7);
+    const week = getWeekRange(base);
+    document.getElementById("range").textContent = week.start + " ~ " + week.end;
+    document.getElementById("next").disabled = offset >= 0;
+
+    const recs = loadRecords().filter((r) => r.date >= week.start && r.date <= week.end);
+    const volumeOf = (r) => Number(r.weight) * Number(r.reps) * Number(r.sets);
+
+    document.getElementById("days").textContent = new Set(recs.map((r) => r.date)).size;
+    const totalSets = recs.reduce((s, r) => s + Number(r.sets), 0);
+    document.getElementById("sets").textContent = totalSets;
+    renderGoal(totalSets);
+    renderDeltas(week, base);
+    document.getElementById("volume").textContent = Math.round(recs.reduce((s, r) => s + volumeOf(r), 0)).toLocaleString("ko-KR");
+
+    // 요일별 막대
+    const perDay = DAY_LABELS.map((_, i) => {
+      const d = new Date(week.startDate);
+      d.setDate(d.getDate() + i);
+      const key = dateString(d);
+      return recs.filter((r) => r.date === key).reduce((s, r) => s + Number(r.sets), 0);
+    });
+    const max = Math.max(1, ...perDay);
+    const bars = document.getElementById("bars");
+    bars.replaceChildren();
+    perDay.forEach((value, i) => {
+      const col = el("div", undefined, "bar-col");
+      col.appendChild(el("span", value ? String(value) : ""));
+      const bar = el("div", undefined, "bar");
+      bar.style.height = (value / max) * 80 + "px";
+      col.appendChild(bar);
+      col.appendChild(el("span", DAY_LABELS[i]));
+      bars.appendChild(col);
+    });
+
+    // 종목별 합계
+    const box = document.getElementById("byExercise");
+    box.replaceChildren();
+    if (!recs.length) {
+      box.appendChild(el("div", "이 주에는 기록이 없습니다", "empty"));
+      return;
+    }
+    const groups = {};
+    recs.forEach((r) => {
+      const g = (groups[r.exercise] = groups[r.exercise] || { sets: 0, volume: 0, best: 0 });
+      g.sets += Number(r.sets);
+      g.volume += volumeOf(r);
+      g.best = Math.max(g.best, Number(r.weight));
+    });
+    const table = el("table");
+    const head = el("tr");
+    ["종목", "세트", "볼륨", "최고"].forEach((t, i) => head.appendChild(el("th", t, i >= 1 ? "num" : "")));
+    table.appendChild(head);
+    Object.keys(groups).forEach((name) => {
+      const g = groups[name];
+      const tr = el("tr");
+      tr.appendChild(el("td", name));
+      tr.appendChild(el("td", String(g.sets), "num"));
+      tr.appendChild(el("td", Math.round(g.volume).toLocaleString("ko-KR"), "num"));
+      tr.appendChild(el("td", fmtNum(g.best) + "kg", "num"));
+      table.appendChild(tr);
+    });
+    box.appendChild(table);
+  }
+
+  // 바로 앞 주와 비교해 증감을 표시한다
+  function setDelta(id, cur, prev, unit) {
+    const node = document.getElementById(id);
+    node.className = "delta";
+    if (!prev) {
+      node.textContent = cur ? "비교할 전주 기록 없음" : "";
+      return;
+    }
+    if (unit === "일") {
+      const diff = cur - prev;
+      node.textContent = diff === 0 ? "전주와 같음" : (diff > 0 ? "▲ " : "▼ ") + Math.abs(diff) + "일";
+      if (diff > 0) node.classList.add("up");
+      return;
+    }
+    const pct = Math.round(((cur - prev) / prev) * 100);
+    node.textContent = pct === 0 ? "전주와 같음" : (pct > 0 ? "▲ " : "▼ ") + Math.abs(pct) + "%";
+    if (pct > 0) node.classList.add("up");
+  }
+
+  function renderDeltas(week, base) {
+    const all = loadRecords();
+    const prevBase = new Date(base);
+    prevBase.setDate(prevBase.getDate() - 7);
+    const cur = weekTotals(all, week);
+    const prev = weekTotals(all, getWeekRange(prevBase));
+    setDelta("dDays", cur.days, prev.days, "일");
+    setDelta("dSets", cur.sets, prev.sets, "세트");
+    setDelta("dVolume", cur.volume, prev.volume, "kg");
+  }
+
+  // 주간 목표 세트 대비 달성률
+  function renderGoal(total) {
+    const goal = loadGoal();
+    const input = document.getElementById("goal");
+    if (document.activeElement !== input) input.value = goal || "";
+    const bar = document.getElementById("progressBar");
+    const text = document.getElementById("goalText");
+    const track = document.getElementById("progress");
+    if (!goal) {
+      bar.style.width = "0%";
+      track.setAttribute("aria-valuenow", "0");
+      text.textContent = "목표 세트 수를 정하면 달성률이 표시됩니다";
+      return;
+    }
+    const pct = Math.min(100, Math.round((total / goal) * 100));
+    bar.style.width = pct + "%";
+    track.setAttribute("aria-valuenow", String(pct));
+    text.textContent = total >= goal
+      ? "목표 달성: " + total + " / " + goal + " 세트 (" + pct + "%)"
+      : total + " / " + goal + " 세트 (" + pct + "%), " + (goal - total) + "세트 남음";
+  }
+
+  document.getElementById("saveGoal").addEventListener("click", () => {
+    const n = parseInt(document.getElementById("goal").value, 10);
+    saveGoal(n >= 1 ? n : 0); // 비우면 목표를 지운다
+    render();
+  });
+
+  document.getElementById("prev").addEventListener("click", () => { offset -= 1; render(); });
+  document.getElementById("next").addEventListener("click", () => { if (offset < 0) { offset += 1; render(); } });
+  render();
+</script>
+</body>
+</html>

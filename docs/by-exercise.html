@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>헬스 루틴 기록 - 종목별 조회</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>종목별 조회</h1>
+  <p class="sub">종목을 고르면 기록과 최고 기록을 볼 수 있습니다.</p>
+
+  <div class="card">
+    <label for="exercise">종목</label>
+    <select id="exercise"></select>
+  </div>
+
+  <div id="result">
+    <div class="card best-card">
+      <div class="sub">최고 기록</div>
+      <div class="big" id="bestWeight">-</div>
+      <div class="date" id="bestDate"></div>
+      <div class="rm" id="bestRm"></div>
+    </div>
+
+    <div class="card">
+      <h2>무게 추이</h2>
+      <div id="chart"></div>
+    </div>
+
+    <div class="card">
+      <h2>전체 기록</h2>
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <div class="card" id="allBestCard">
+    <h2>종목별 최고 기록 한눈에 보기</h2>
+    <div id="allBest"></div>
+  </div>
+</main>
+<nav id="nav"></nav>
+
+<script src="storage.js"></script>
+<script src="nav.js"></script>
+<script>
+  // 종목별 조회 및 최고 기록 담당
+  renderNav("exercise");
+
+  const records = loadRecords();
+  const select = document.getElementById("exercise");
+  const names = [...new Set(records.map((r) => r.exercise))];
+
+  function renderDetail() {
+    const found = records.filter((r) => r.exercise === select.value);
+    const best = findBest(found);
+    document.getElementById("bestWeight").textContent = fmtNum(best.weight) + " kg";
+    document.getElementById("bestDate").textContent = best.date;
+    // 예상 1RM은 기록 중 가장 높은 추정값 (Epley 공식, 추정치)
+    const topRm = found.reduce((m, r) => (estimate1RM(r.weight, r.reps) > estimate1RM(m.weight, m.reps) ? r : m), found[0]);
+    const rm = estimate1RM(topRm.weight, topRm.reps);
+    document.getElementById("bestRm").textContent = rm ? "예상 1RM (추정) " + fmtNum(rm) + " kg" : "";
+    renderChart(found);
+
+    const box = document.getElementById("list");
+    box.replaceChildren();
+    const table = el("table");
+    const head = el("tr");
+    ["날짜", "무게", "횟수×세트"].forEach((t, i) => head.appendChild(el("th", t, i >= 1 ? "num" : "")));
+    table.appendChild(head);
+    // 최신 날짜가 위로 오게 정렬 (같은 날은 나중에 입력한 기록이 위)
+    found.slice().reverse().sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).forEach((r) => {
+      const tr = el("tr", undefined, r === best ? "best" : "");
+      tr.appendChild(el("td", r.date));
+      tr.appendChild(el("td", fmtNum(r.weight) + "kg", "num"));
+      tr.appendChild(el("td", r.reps + "×" + r.sets, "num"));
+      table.appendChild(tr);
+    });
+    box.appendChild(table);
+  }
+
+  // 날짜별 최고 무게를 선으로 이어 보여주는 추이 그래프 (라이브러리 없이 SVG로 직접 그린다)
+  function renderChart(found) {
+    const box = document.getElementById("chart");
+    box.replaceChildren();
+
+    const byDate = {};
+    found.forEach((r) => {
+      byDate[r.date] = Math.max(byDate[r.date] || 0, Number(r.weight));
+    });
+    const days = Object.keys(byDate).sort();
+    if (days.length < 2) {
+      box.appendChild(el("div", "운동한 날이 2일 이상이면 추이 그래프가 표시됩니다", "empty"));
+      return;
+    }
+
+    const W = 320, H = 150, L = 36, R = 12, T = 12, B = 28;
+    const values = days.map((d) => byDate[d]);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = max - min || 1;
+    const x = (i) => L + (i * (W - L - R)) / (days.length - 1);
+    const y = (v) => T + (1 - (v - min) / span) * (H - T - B);
+
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", select.value + " 날짜별 최고 무게 추이");
+    svg.setAttribute("class", "chart");
+    function add(tag, attrs, text) {
+      const node = document.createElementNS(NS, tag);
+      Object.keys(attrs).forEach((k) => node.setAttribute(k, attrs[k]));
+      if (text !== undefined) node.textContent = text;
+      svg.appendChild(node);
+    }
+
+    [min, max].forEach((v) => {
+      add("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), class: "grid" });
+      add("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end", class: "tick" }, fmtNum(v));
+    });
+    add("polyline", { points: values.map((v, i) => x(i) + "," + y(v)).join(" "), class: "line" });
+    values.forEach((v, i) => add("circle", { cx: x(i), cy: y(v), r: 4, class: "dot" }));
+    add("text", { x: x(0), y: H - 8, "text-anchor": "start", class: "tick" }, days[0].slice(5));
+    add("text", { x: x(days.length - 1), y: H - 8, "text-anchor": "end", class: "tick" }, days[days.length - 1].slice(5));
+    box.appendChild(svg);
+  }
+
+  function renderAllBest() {
+    const box = document.getElementById("allBest");
+    const table = el("table");
+    const head = el("tr");
+    ["종목", "최고 무게", "날짜"].forEach((t, i) => head.appendChild(el("th", t, i === 1 ? "num" : "")));
+    table.appendChild(head);
+    names.forEach((n) => {
+      const best = findBest(records.filter((r) => r.exercise === n));
+      const tr = el("tr");
+      tr.appendChild(el("td", n));
+      tr.appendChild(el("td", fmtNum(best.weight) + "kg", "num"));
+      tr.appendChild(el("td", best.date));
+      table.appendChild(tr);
+    });
+    box.appendChild(table);
+  }
+
+  if (!names.length) {
+    document.getElementById("result").replaceChildren(el("div", "기록이 없습니다. '기록' 탭에서 먼저 운동을 입력해 주세요.", "empty"));
+    select.disabled = true;
+    document.getElementById("allBestCard").hidden = true;
+  } else {
+    names.forEach((n) => {
+      const opt = el("option", n);
+      opt.value = n;
+      select.appendChild(opt);
+    });
+    select.addEventListener("change", renderDetail);
+    renderDetail();
+    renderAllBest();
+  }
+</script>
+</body>
+</html>
